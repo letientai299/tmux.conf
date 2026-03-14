@@ -5,29 +5,14 @@
 
 . "$(cd "$(dirname "$0")" && pwd)/palette.sh"
 
-# Resolve the actual executable name for a pane.
-# pane_current_command can be wrong when a process sets its title
-# (e.g., Node.js process.title = version). On macOS, ps -o comm= returns
-# the full executable path from the kernel, unaffected by title changes.
-resolve_cmd() {
-  shell_pid=$1
-  fallback=$2
-  child=$(pgrep -nP "$shell_pid" 2>/dev/null)
-  if [ -n "$child" ]; then
-    name=$(ps -p "$child" -o comm= 2>/dev/null)
-    basename "${name:-$fallback}"
-  else
-    echo "$fallback"
-  fi
-}
-
 build_tree() {
-  tmux list-panes -a \
-    -F '#{session_name}	#{window_index}	#{window_name}	#{pane_index}	#{pane_pid}	#{pane_current_command}	#{pane_current_path}' |
-  while IFS='	' read -r sess win wname pidx pid pcmd path; do
-    cmd=$(resolve_cmd "$pid" "$pcmd")
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sess" "$win" "$wname" "$pidx" "$cmd" "$path"
-  done |
+  # Single ps call for child-process resolution (replaces per-pane pgrep+ps).
+  # Combined with tmux pane data in one awk pass to avoid N shell forks.
+  ps_data=$(ps -eo ppid=,comm=)
+  pane_data=$(tmux list-panes -a \
+    -F '#{session_name}	#{window_index}	#{window_name}	#{pane_index}	#{pane_pid}	#{pane_current_command}	#{pane_current_path}')
+
+  printf '%s\n---\n%s\n' "$ps_data" "$pane_data" |
   awk -F'\t' \
     -v cb="${a_bold}${a_blue}" \
     -v cy="$a_yellow" \
@@ -35,7 +20,23 @@ build_tree() {
     -v cm="$a_muted" \
     -v cr="$a_reset" \
   '
-    { s[NR]=$1; w[NR]=$2; wn[NR]=$3; p[NR]=$4; cmd[NR]=$5; dir[NR]=$6; N=NR }
+    /^---$/ { phase = 1; next }
+    phase == 0 {
+      # ps output (space-separated): build ppid → basename(cmd) map.
+      split($0, a, " ")
+      n = split(a[2], parts, "/")
+      children[a[1]] = parts[n]
+      next
+    }
+    {
+      # Resolve command: prefer child of shell pid over pane_current_command.
+      resolved = children[$5]
+      if (resolved == "") {
+        n = split($6, parts, "/")
+        resolved = parts[n]
+      }
+      N++; s[N]=$1; w[N]=$2; wn[N]=$3; p[N]=$4; cmd[N]=resolved; dir[N]=$7
+    }
     END {
       for (i = 1; i <= N; i++) {
         new_s = (i == 1 || s[i] != s[i-1])

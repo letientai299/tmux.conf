@@ -12,22 +12,16 @@ else
   bg=$c_bg
 fi
 
-tmux set -g status-style "bg=$bg,fg=$c_fg"
-
-# Left: session name + mode indicator.
-tmux set -g status-left-style "fg=$c_blue,bold"
-tmux set -g status-left \
-  " [#{session_name}] #{?client_prefix,#[fg=$c_red]PREFIX,#{?pane_in_mode,#{?#{==:#{pane_mode},copy-mode},#[fg=$c_purple] COPY ,#{?#{==:#{pane_mode},view-mode},#[fg=$c_cyan] VIEW ,#{?#{==:#{pane_mode},tree-mode},#[fg=$c_green] TREE ,#{?#{==:#{pane_mode},buffer-mode},#[fg=$c_yellow] BUFR ,#{?#{==:#{pane_mode},client-mode},#[fg=$c_yellow] CLNT ,#[fg=$c_purple] MODE }}}}},#{?window_zoomed_flag,#[fg=$c_yellow] ZOOM ,#[fg=$c_fg]NORMAL}}} "
-
-# Right: user@host | public-ip | uptime | clock.
-tmux set -g status-right-style "fg=$c_fg"
-tmux set -g status-right \
-  "#[fg=$c_blue]#(echo \${USER:-\$LOGNAME})#[fg=$c_muted]@#[fg=$c_fg]#H#[fg=$c_muted]│#[fg=$c_green]#(\$TMUX_CONF_DIR/conf.d/pub-ip.sh)#[fg=$c_muted]│#[fg=$c_yellow]#(\$TMUX_CONF_DIR/conf.d/uptime.sh)#[fg=$c_muted]│#[fg=$c_fg]%H:%M "
-
-# Window tabs.
-tmux set -g window-status-style "bg=$c_bg_win,fg=$c_fg"
-tmux set -g window-status-current-style "bg=$c_bg_win_cur,fg=$c_purple,bold"
-
-# Pane borders.
-tmux set -g pane-border-style "fg=$c_border"
-tmux set -g pane-active-border-style "fg=$c_blue_bright"
+# Batch all style settings into a single tmux call to avoid per-command IPC.
+tmux \
+  set -g status-style "bg=$bg,fg=$c_fg" \; \
+  set -g status-left-style "fg=$c_blue,bold" \; \
+  set -g status-left \
+    " [#{session_name}] #{?client_prefix,#[fg=$c_red]PREFIX,#{?pane_in_mode,#{?#{==:#{pane_mode},copy-mode},#[fg=$c_purple] COPY ,#{?#{==:#{pane_mode},view-mode},#[fg=$c_cyan] VIEW ,#{?#{==:#{pane_mode},tree-mode},#[fg=$c_green] TREE ,#{?#{==:#{pane_mode},buffer-mode},#[fg=$c_yellow] BUFR ,#{?#{==:#{pane_mode},client-mode},#[fg=$c_yellow] CLNT ,#[fg=$c_purple] MODE }}}}},#{?window_zoomed_flag,#[fg=$c_yellow] ZOOM ,#[fg=$c_fg]NORMAL}}} " \; \
+  set -g status-right-style "fg=$c_fg" \; \
+  set -g status-right \
+    "#[fg=$c_blue]#(echo \${USER:-\$LOGNAME})#[fg=$c_muted]@#[fg=$c_fg]#H#[fg=$c_muted]│#[fg=$c_green]#(\$TMUX_CONF_DIR/conf.d/pub-ip.sh)#[fg=$c_muted]│#[fg=$c_yellow]#(\$TMUX_CONF_DIR/conf.d/uptime.sh)#[fg=$c_muted]│#[fg=$c_fg]%H:%M " \; \
+  set -g window-status-style "bg=$c_bg_win,fg=$c_fg" \; \
+  set -g window-status-current-style "bg=$c_bg_win_cur,fg=$c_purple,bold" \; \
+  set -g pane-border-style "fg=$c_border" \; \
+  set -g pane-active-border-style "fg=$c_blue_bright"

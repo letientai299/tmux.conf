@@ -57,30 +57,8 @@ build_tree() {
   '
 }
 
-# Preview adapts to target type:
-#   session       → window list + active pane capture
-#   session:win   → pane list   + active pane capture
-#   session:w.p   → pane capture only
-preview_cmd='
-  t={1}
-  case "$t" in
-    *.*)
-      tmux capture-pane -e -t "$t" -p
-      ;;
-    *:*)
-      tmux list-panes -t "$t" \
-        -F "  #{pane_index}: #{pane_current_command}  #{pane_current_path}"
-      echo "─────"
-      tmux capture-pane -e -t "$t" -p
-      ;;
-    *)
-      tmux list-windows -t "$t" \
-        -F "  #{window_index}: #{window_name}  (#{window_panes} panes)  #{pane_current_path}"
-      echo "─────"
-      tmux capture-pane -e -t "$t" -p
-      ;;
-  esac
-'
+# Resolve TMUX_CONF_DIR for preview script path.
+script_dir=$(cd "$(dirname "$0")" && pwd)
 
 target=$(
   build_tree |
@@ -93,7 +71,7 @@ target=$(
     --with-nth=2 \
     --prompt='> ' \
     --header='Switch to session / window / pane' \
-    --preview="$preview_cmd" \
+    --preview="$script_dir/fzf-preview.sh {1}" \
     --preview-window='down:70%' |
   cut -f1
 )

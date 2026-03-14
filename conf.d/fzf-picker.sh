@@ -3,6 +3,8 @@
 # Shows sessions/windows/panes in a tree with capture-pane preview.
 # Usage: called from a tmux display-popup keybinding.
 
+. "$(cd "$(dirname "$0")" && pwd)/palette.sh"
+
 # Resolve the actual executable name for a pane.
 # pane_current_command can be wrong when a process sets its title
 # (e.g., Node.js process.title = version). On macOS, ps -o comm= returns
@@ -26,7 +28,13 @@ build_tree() {
     cmd=$(resolve_cmd "$pid" "$pcmd")
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sess" "$win" "$wname" "$pidx" "$cmd" "$path"
   done |
-  awk -F'\t' '
+  awk -F'\t' \
+    -v cb="${a_bold}${a_blue}" \
+    -v cy="$a_yellow" \
+    -v cg="$a_green" \
+    -v cm="$a_muted" \
+    -v cr="$a_reset" \
+  '
     { s[NR]=$1; w[NR]=$2; wn[NR]=$3; p[NR]=$4; cmd[NR]=$5; dir[NR]=$6; N=NR }
     END {
       for (i = 1; i <= N; i++) {
@@ -34,7 +42,7 @@ build_tree() {
         new_w = (new_s || w[i] != w[i-1])
 
         if (new_s)
-          printf "%s\t\033[1;34m%s\033[0m\n", s[i], s[i]
+          printf "%s\t%s%s%s\n", s[i], cb, s[i], cr
 
         if (new_w) {
           lw = 1
@@ -44,14 +52,14 @@ build_tree() {
           }
           wb = lw ? "└─" : "├─"
           wc[s[i], w[i]] = lw ? "   " : "│  "
-          printf "%s:%s\t  %s \033[33m%s\033[0m\n", s[i], w[i], wb, wn[i]
+          printf "%s:%s\t  %s %s%s%s\n", s[i], w[i], wb, cy, wn[i], cr
         }
 
         lp = (i == N || s[i+1] != s[i] || w[i+1] != w[i])
         pb = lp ? "└─" : "├─"
 
-        printf "%s:%s.%s\t  %s  %s \033[32m%d\033[0m %s \033[90m%s\033[0m\n", \
-          s[i], w[i], p[i], wc[s[i], w[i]], pb, p[i], cmd[i], dir[i]
+        printf "%s:%s.%s\t  %s  %s %s%d%s %s %s%s%s\n", \
+          s[i], w[i], p[i], wc[s[i], w[i]], pb, cg, p[i], cr, cmd[i], cm, dir[i], cr
       }
     }
   '

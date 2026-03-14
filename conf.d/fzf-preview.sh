@@ -4,12 +4,14 @@
 # Usage: fzf-preview.sh <target>
 #   target = session | session:window | session:window.pane
 
+. "$(cd "$(dirname "$0")" && pwd)/palette.sh"
+
 t=$1
 
 capture_pane() {
   target=$1
   label=$2
-  printf '\033[90m─── %s ───\033[0m\n' "$label"
+  printf '%s─── %s ───%s\n' "$a_muted" "$label" "$a_reset"
   tmux capture-pane -e -t "$target" -p
   echo
 }

@@ -4,6 +4,8 @@
 
 set -u
 
+. "$(cd "$(dirname "$0")" && pwd)/palette.sh"
+
 if ! command -v fzf >/dev/null 2>&1; then
   echo "extractor: fzf not found" >&2
   exit 1
@@ -14,16 +16,16 @@ pane_id=$(tmux list-panes -F '#{pane_active} #{pane_id}' | awk '/^1/ {print $2}'
 pane_path=$(tmux display -t "$pane_id" -p '#{pane_current_path}')
 hostname=$(hostname -s 2>/dev/null || echo localhost)
 
-# --- Colors (Atom One Dark palette) ---
-c_reset='\033[0m'
-c_type_file='\033[38;5;209m'    # orange
-c_type_url='\033[38;5;75m'      # blue
-c_type_osc8='\033[38;5;141m'    # purple
-c_type_path='\033[38;5;114m'    # green
-c_type_git='\033[38;5;180m'     # yellow
-c_type_ip4='\033[38;5;173m'     # salmon
-c_type_ip6='\033[38;5;139m'     # mauve
-c_val='\033[38;5;252m'          # light gray
+# --- Colors (mapped from palette.sh) ---
+c_reset=$a_reset
+c_type_file=$a_orange
+c_type_url=$a_blue
+c_type_osc8=$a_purple
+c_type_path=$a_green
+c_type_git=$a_yellow
+c_type_ip4=$a_red
+c_type_ip6=$a_cyan
+c_val=$a_fg
 
 # --- Helpers ---
 

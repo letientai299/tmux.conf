@@ -1,8 +1,11 @@
 #!/bin/sh
-# Output window tab label: [sudo indicator] <dir> ~ <cmd>
+# Output window tab label: [index + sudo indicator] <dir> ~ <cmd>
 # Resolves through sudo to show the actual command name.
-# Usage: pane-label.sh <pane_pid> <dir> <cmd>
-pane_pid=$1 dir=$2 cmd=$3
+# Usage: pane-label.sh <pane_pid> <dir> <cmd> <window_index>
+
+. "$(cd "$(dirname "$0")" && pwd)/palette.sh"
+
+pane_pid=$1 dir=$2 cmd=$3 idx=$4
 
 sudo_pid=$(pgrep -xP "$pane_pid" sudo 2>/dev/null)
 if [ -n "$sudo_pid" ]; then
@@ -23,7 +26,7 @@ if [ -n "$sudo_pid" ]; then
   # shell's cwd (which we own) via lsof.
   shell_cwd=$(lsof -a -p "$pane_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
   [ -n "$shell_cwd" ] && dir=$(basename "$shell_cwd")
-  printf '#[fg=#e06c75,bold]!#[fg=default,nobold] %s ~ %s' "$dir" "$cmd"
+  printf '#[bg=%s,fg=%s,bold]%s! #[bg=default,fg=default,nobold]%s ~ %s' "$c_red" "$c_bg" "$idx" "$dir" "$cmd"
 else
-  printf '%s ~ %s' "$dir" "$cmd"
+  printf '%s: %s ~ %s' "$idx" "$dir" "$cmd"
 fi

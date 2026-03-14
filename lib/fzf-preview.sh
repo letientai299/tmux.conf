@@ -4,7 +4,9 @@
 # Usage: fzf-preview.sh <target>
 #   target = session | session:window | session:window.pane
 
-. "$(cd "$(dirname "$0")" && pwd)/palette.sh"
+_prev_dir=$(cd "$(dirname "$0")" && pwd)
+. "$_prev_dir/palette.sh"
+. "$_prev_dir/tmux-util.sh"
 
 t=$1
 
@@ -17,9 +19,8 @@ esac
 case "$t" in
   *:*) pane_data=$(tmux list-panes -t "$t" \
          -F '#{session_name}:#{window_index}.#{pane_index}	#{window_index}	#{window_name}	#{pane_pid}	#{pane_current_command}	#{pane_current_path}') ;;
-  *)   pane_data=$(tmux list-panes -t "$t" -a \
-         -F '#{session_name}	#{session_name}:#{window_index}.#{pane_index}	#{window_index}	#{window_name}	#{pane_pid}	#{pane_current_command}	#{pane_current_path}' |
-         awk -F'\t' -v s="$t" '$1 == s { print $2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7 }') ;;
+  *)   pane_data=$(tmux list-panes -t "$t" -s \
+         -F '#{session_name}:#{window_index}.#{pane_index}	#{window_index}	#{window_name}	#{pane_pid}	#{pane_current_command}	#{pane_current_path}') ;;
 esac
 
 [ -z "$pane_data" ] && exit 0
@@ -31,19 +32,8 @@ ps_data=$(ps -eo ppid=,comm=)
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-set --
-i=0
-while IFS='	' read -r ref rest; do
-  set -- "$@" capture-pane -t "$ref" -b "_prev$i" -e \; \
-               save-buffer -b "_prev$i" "$tmpdir/$i" \; \
-               delete-buffer -b "_prev$i" \;
-  i=$((i + 1))
-done <<EOF
-$pane_data
-EOF
-
-[ $# -eq 0 ] && exit 0
-tmux "$@"
+printf '%s\n' "$pane_data" | cut -f1 |
+  batch_capture_panes "$tmpdir" "_prev" || exit 0
 
 # Build labels via awk (one process, no per-pane forks), then stream output.
 labels=$(printf '%s\n---\n%s\n' "$ps_data" "$pane_data" | awk -F'\t' '

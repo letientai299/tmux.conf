@@ -4,7 +4,9 @@
 
 set -u
 
-. "$(cd "$(dirname "$0")" && pwd)/palette.sh"
+_ext_dir=$(cd "$(dirname "$0")" && pwd)
+. "$_ext_dir/palette.sh"
+. "$_ext_dir/tmux-util.sh"
 
 if ! command -v fzf >/dev/null 2>&1; then
   echo "extractor: fzf not found" >&2
@@ -12,38 +14,25 @@ if ! command -v fzf >/dev/null 2>&1; then
 fi
 
 # Single list-panes call gets pane_id (action target) and all pane info.
-pane_data=$(tmux list-panes -s -F '#{pane_active} #{pane_id} #{pane_current_path}')
-pane_id=$(printf '%s\n' "$pane_data" | awk '/^1/ {print $2; exit}')
-pane_info=$(printf '%s\n' "$pane_data" | awk '{print $2, $3}')
+# Tab-delimited to handle spaces in paths.
+pane_data=$(tmux list-panes -s -F '#{pane_active}	#{pane_id}	#{pane_current_path}')
+pane_id=$(printf '%s\n' "$pane_data" | awk -F'	' '/^1/ {print $2; exit}')
+pane_info=$(printf '%s\n' "$pane_data" | awk -F'	' '{print $2"\t"$3}')
 hn=${HOSTNAME%%.*}
 : "${hn:=$(hostname -s 2>/dev/null)}"
 : "${hn:=localhost}"
 
 # --- Capture all session panes in a batched tmux call ---
-# Build one `tmux` invocation that captures every pane into a named buffer,
-# saves each buffer to a temp file, and deletes the buffer — all via `\;`.
-# This avoids per-pane IPC round trips (the dominant cost).
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-set -- # build argv
-i=0
-while IFS=' ' read -r pid cwd; do
-  set -- "$@" capture-pane -t "$pid" -b "_ext$i" -e -S -500 -E 500 \; \
-               save-buffer -b "_ext$i" "$tmpdir/$i" \; \
-               delete-buffer -b "_ext$i" \;
-  i=$((i + 1))
-done <<EOF
-$pane_info
-EOF
-
-[ $# -eq 0 ] && exit 0
-tmux "$@"
+printf '%s\n' "$pane_info" | cut -f1 |
+  batch_capture_panes "$tmpdir" "_ext" -S -500 -E 500 || exit 0
 
 # --- Stream pane content (with cwd markers) into a single awk extraction ---
 {
   i=0
-  while IFS=' ' read -r pid cwd; do
+  while IFS='	' read -r pid cwd; do
     printf '__PANE__%s\n' "$cwd"
     cat "$tmpdir/$i"
     i=$((i + 1))
@@ -133,9 +122,12 @@ function extract(line,    rest, val, fp, abs) {
     rest = substr(rest, RSTART + RLENGTH)
   }
   rest = line
-  while (match(rest, /[0-9a-f]{7,40}/)) {
+  while (match(rest, /[0-9a-f]{8,40}/)) {
     val = substr(rest, RSTART, RLENGTH)
-    if (val ~ /[0-9]/ && val ~ /[a-f]/) emit(val, "GIT", c_git, "")
+    pre = (RSTART > 1) ? substr(rest, RSTART - 1, 1) : ""
+    post = substr(rest, RSTART + RLENGTH, 1)
+    if (val ~ /[0-9]/ && val ~ /[a-f]/ && pre !~ /[0-9a-fA-F]/ && post !~ /[0-9a-fA-F]/)
+      emit(val, "GIT", c_git, "")
     rest = substr(rest, RSTART + RLENGTH)
   }
   rest = line
@@ -173,7 +165,7 @@ function extract(line,    rest, val, fp, abs) {
   copies=$(printf '%s\n' "$selection" | cut -f1 | grep -vE '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
 
   if [ -n "$urls" ]; then
-    printf '%s\n' "$urls" | xargs open
+    printf '%s\n' "$urls" | while IFS= read -r u; do open "$u"; done
   fi
 
   if [ -n "$copies" ]; then

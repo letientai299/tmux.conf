@@ -26,18 +26,19 @@ hn=${HOSTNAME%%.*}
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-cmd="" i=0
+set -- # build argv
+i=0
 while IFS=' ' read -r pid cwd; do
-  cmd="${cmd}capture-pane -t $pid -b _ext$i -e -S -500 -E 500 \; "
-  cmd="${cmd}save-buffer -b _ext$i $tmpdir/$i \; "
-  cmd="${cmd}delete-buffer -b _ext$i \; "
+  set -- "$@" capture-pane -t "$pid" -b "_ext$i" -e -S -500 -E 500 \; \
+               save-buffer -b "_ext$i" "$tmpdir/$i" \; \
+               delete-buffer -b "_ext$i" \;
   i=$((i + 1))
 done <<EOF
 $pane_info
 EOF
 
-[ -z "$cmd" ] && exit 0
-eval "tmux $cmd"
+[ $# -eq 0 ] && exit 0
+tmux "$@"
 
 # --- Stream pane content (with cwd markers) into a single awk extraction ---
 {
@@ -168,13 +169,11 @@ function extract(line,    rest, val, fp, abs) {
 
   client_tty=$(tmux display -p '#{client_tty}')
 
-  urls=$(echo "$selection" | cut -f1 | grep -E '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
-  copies=$(echo "$selection" | cut -f1 | grep -vE '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
+  urls=$(printf '%s\n' "$selection" | cut -f1 | grep -E '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
+  copies=$(printf '%s\n' "$selection" | cut -f1 | grep -vE '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
 
   if [ -n "$urls" ]; then
-    echo "$urls" | while IFS= read -r u; do
-      open "$u"
-    done
+    printf '%s\n' "$urls" | xargs open
   fi
 
   if [ -n "$copies" ]; then

@@ -11,128 +11,150 @@ if ! command -v fzf >/dev/null 2>&1; then
   exit 1
 fi
 
-# Detect the pane that triggered the popup (action target for insert/open).
-pane_id=$(tmux list-panes -F '#{pane_active} #{pane_id}' | awk '/^1/ {print $2}')
-session_id=$(tmux display -t "$pane_id" -p '#{session_id}')
-hostname=$(hostname -s 2>/dev/null || echo localhost)
+# Single list-panes call gets pane_id (action target) and all pane info.
+pane_data=$(tmux list-panes -s -F '#{pane_active} #{pane_id} #{pane_current_path}')
+pane_id=$(printf '%s\n' "$pane_data" | awk '/^1/ {print $2; exit}')
+pane_info=$(printf '%s\n' "$pane_data" | awk '{print $2, $3}')
+hn=${HOSTNAME%%.*}
+: "${hn:=$(hostname -s 2>/dev/null)}"
+: "${hn:=localhost}"
 
-# pane_path is set per-pane in the extraction loop; resolve_path reads it.
-pane_path=
+# --- Capture all session panes in a batched tmux call ---
+# Build one `tmux` invocation that captures every pane into a named buffer,
+# saves each buffer to a temp file, and deletes the buffer — all via `\;`.
+# This avoids per-pane IPC round trips (the dominant cost).
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
 
-# --- Colors (mapped from palette.sh) ---
-c_reset=$a_reset
-c_type_file=$a_orange
-c_type_url=$a_blue
-c_type_osc8=$a_purple
-c_type_path=$a_green
-c_type_git=$a_yellow
-c_type_ip4=$a_red
-c_type_ip6=$a_cyan
-c_val=$a_fg
+cmd="" i=0
+while IFS=' ' read -r pid cwd; do
+  cmd="${cmd}capture-pane -t $pid -b _ext$i -e -S -500 -E 500 \; "
+  cmd="${cmd}save-buffer -b _ext$i $tmpdir/$i \; "
+  cmd="${cmd}delete-buffer -b _ext$i \; "
+  i=$((i + 1))
+done <<EOF
+$pane_info
+EOF
 
-# --- Helpers ---
+[ -z "$cmd" ] && exit 0
+eval "tmux $cmd"
 
-resolve_path() {
-  case "$1" in
-    ~/*) echo "$HOME/${1#\~/}" ;;
-    /*)  echo "$1" ;;
-    *)   echo "$pane_path/$1" ;;
-  esac
+# --- Stream pane content (with cwd markers) into a single awk extraction ---
+{
+  i=0
+  while IFS=' ' read -r pid cwd; do
+    printf '__PANE__%s\n' "$cwd"
+    cat "$tmpdir/$i"
+    i=$((i + 1))
+  done <<EOF2
+$pane_info
+EOF2
+} | awk \
+  -v hostname="$hn" -v home="$HOME" \
+  -v reset="$a_reset" -v c_fg="$a_fg" \
+  -v c_file="$a_orange" -v c_url="$a_blue" -v c_osc8="$a_purple" \
+  -v c_path="$a_green" -v c_git="$a_yellow" \
+  -v c_ip4="$a_red" -v c_ip6="$a_cyan" \
+'
+BEGIN { pp = "" }
+
+/^__PANE__/ { pp = substr($0, 9); next }
+
+{
+  plain = $0
+  gsub(/\033\[[0-9;]*[a-zA-Z]/, "", plain)
+  gsub(/\033\]8;[^;]*;[^\033]*\033\\/, "", plain)
+
+  # Extract OSC 8 hyperlinks from raw escape sequences.
+  raw = $0
+  while (match(raw, /\033\]8;[^;]*;[^\033]*\033\\/)) {
+    chunk = substr(raw, RSTART, RLENGTH)
+    sub(/^\033\]8;[^;]*;/, "", chunk)
+    sub(/\033\\$/, "", chunk)
+    if (chunk ~ /^https?:\/\//) emit(chunk, "OSC8", c_osc8, chunk)
+    raw = substr(raw, RSTART + RLENGTH)
+  }
+
+  extract(plain)
 }
 
-# Format: type:raw_value<TAB>colored_label osc8_value
-# Column 1 encodes type for action dispatch after fzf selection.
-format_line() {
-  _raw=$1 _type=$2 _color=$3 _link=${4:-}
-  if [ -n "$_link" ]; then
-    printf '%s:%s\t%b%-9s%b %b\033]8;;%s\033\\%s\033]8;;\033\\%b\n' \
-      "$_type" "$_raw" "$_color" "$_type" "$c_reset" "$c_val" "$_link" "$_raw" "$c_reset"
+function resolve(p) {
+  if (p ~ /^~\//) return home "/" substr(p, 3)
+  if (p ~ /^\//) return p
+  return pp "/" p
+}
+
+function emit(v, t, c, l) {
+  if (seen[v]++) return
+  k = t ":" v
+  if (l != "")
+    printf "%s\t%s%-9s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s\n", \
+      k, c, t, reset, c_fg, l, v, reset
   else
-    printf '%s:%s\t%b%-9s%b %b%s%b\n' \
-      "$_type" "$_raw" "$_color" "$_type" "$c_reset" "$c_val" "$_raw" "$c_reset"
-  fi
+    printf "%s\t%s%-9s%s %s%s%s\n", \
+      k, c, t, reset, c_fg, v, reset
 }
 
-# --- Build candidates from all panes in the session ---
-# Each extraction appends to a temp file, then we deduplicate.
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-
-tmux list-panes -s -t "$session_id" -F '#{pane_id}' | while IFS= read -r pid; do
-  content=$(tmux capture-pane -t "$pid" -p -S -500 -E 500 2>/dev/null || true)
-  [ -z "$content" ] && continue
-
-  raw_content=$(tmux capture-pane -t "$pid" -p -S -500 -E 500 -e 2>/dev/null || true)
-
-  # Set pane_path per-pane so resolve_path resolves relative paths correctly.
-  pane_path=$(tmux display -t "$pid" -p '#{pane_current_path}')
-
-  # FILE:LINE — path.ext:123 (optionally :col)
-  echo "$content" | grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:[0-9]+(:[0-9]+)?' | while IFS= read -r m; do
-    file_part=${m%%:*}
-    abs=$(resolve_path "$file_part")
-    format_line "$m" "FILE:LINE" "$c_type_file" "file://$hostname$abs"
-  done >> "$tmp"
-
-  # URL — http(s)://...
-  echo "$content" | grep -oE 'https?://[][A-Za-z0-9._~:/?#@!$&'"'"'()*+,;=%-]+' | \
-    sed 's/[]),.]$//' | while IFS= read -r m; do
-    format_line "$m" "URL" "$c_type_url" "$m"
-  done >> "$tmp"
-
-  # OSC 8 — extract hyperlinks from escape sequences
-  if [ -n "$raw_content" ]; then
-    printf '%s' "$raw_content" | sed -n 's/.*\x1b\]8;[^;]*;\([^\x1b]*\)\x1b\\.*/\1/gp' | \
-      grep -oE 'https?://[^ ]+' | while IFS= read -r m; do
-      format_line "$m" "OSC8" "$c_type_osc8" "$m"
-    done >> "$tmp"
-  fi
-
-  # PATH — ~/paths, absolute (require dir component), relative (dir/file.ext, ./file)
-  echo "$content" | grep -oE '~/[A-Za-z0-9_./-]+' | while IFS= read -r m; do
-    abs=$(resolve_path "$m")
-    format_line "$m" "PATH" "$c_type_path" "file://$hostname$abs"
-  done >> "$tmp"
-
-  echo "$content" | grep -oE '(/[A-Za-z0-9_.-]+){2,}' | grep -v '^//' | while IFS= read -r m; do
-    format_line "$m" "PATH" "$c_type_path" "file://$hostname$m"
-  done >> "$tmp"
-
-  echo "$content" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+' | while IFS= read -r m; do
-    abs=$(resolve_path "$m")
-    format_line "$m" "PATH" "$c_type_path" "file://$hostname$abs"
-  done >> "$tmp"
-
-  echo "$content" | grep -oE '\./[A-Za-z0-9_./-]+' | while IFS= read -r m; do
-    abs=$(resolve_path "$m")
-    format_line "$m" "PATH" "$c_type_path" "file://$hostname$abs"
-  done >> "$tmp"
-
-  # GIT — 7-40 hex chars, must contain both digit and letter
-  echo "$content" | grep -oE '\b[0-9a-f]{7,40}\b' | \
-    grep '[0-9]' | grep '[a-f]' | while IFS= read -r m; do
-    format_line "$m" "GIT" "$c_type_git"
-  done >> "$tmp"
-
-  # IPv4 — dotted quad
-  echo "$content" | grep -oE '\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b' | while IFS= read -r m; do
-    format_line "$m" "IPv4" "$c_type_ip4"
-  done >> "$tmp"
-
-  # IPv6 — require 4+ colon-separated groups (avoids HH:MM:SS timestamps) or ::
-  echo "$content" | grep -oE '([0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}|::([0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|[0-9a-fA-F]{1,4}::(%[A-Za-z0-9]+)?' | while IFS= read -r m; do
-    format_line "$m" "IPv6" "$c_type_ip6"
-  done >> "$tmp"
-done
-
-# --- Deduplicate by raw value (column 1) ---
-if [ ! -s "$tmp" ]; then
-  exit 0
-fi
-
-# awk dedup on raw value (after type: prefix), preserving order
-selection=$(awk -F'\t' '{ v=substr($1, index($1,":")+1) } !seen[v]++' "$tmp" | \
-  fzf \
+function extract(line,    rest, val, fp, abs) {
+  rest = line
+  while (match(rest, /https?:\/\/[][A-Za-z0-9._~:\/?#@!$&'"'"'()*+,;=%-]+/)) {
+    val = substr(rest, RSTART, RLENGTH); sub(/[]),.]$/, "", val)
+    emit(val, "URL", c_url, val); rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /[A-Za-z0-9_.\/-]+\.[A-Za-z0-9]+:[0-9]+(:[0-9]+)?/)) {
+    val = substr(rest, RSTART, RLENGTH); fp = val; sub(/:.*$/, "", fp)
+    abs = resolve(fp); emit(val, "FILE:LINE", c_file, "file://" hostname abs)
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /~\/[A-Za-z0-9_.\/-]+/)) {
+    val = substr(rest, RSTART, RLENGTH); abs = resolve(val)
+    emit(val, "PATH", c_path, "file://" hostname abs)
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.\/-]+/)) {
+    val = substr(rest, RSTART, RLENGTH)
+    if (val !~ /^\/\//) emit(val, "PATH", c_path, "file://" hostname val)
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /[A-Za-z0-9_.-]+\/[A-Za-z0-9_.\/-]+\.[A-Za-z0-9]+/)) {
+    val = substr(rest, RSTART, RLENGTH); abs = resolve(val)
+    emit(val, "PATH", c_path, "file://" hostname abs)
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /\.\/[A-Za-z0-9_.\/-]+/)) {
+    val = substr(rest, RSTART, RLENGTH); abs = resolve(val)
+    emit(val, "PATH", c_path, "file://" hostname abs)
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /[0-9a-f]{7,40}/)) {
+    val = substr(rest, RSTART, RLENGTH)
+    if (val ~ /[0-9]/ && val ~ /[a-f]/) emit(val, "GIT", c_git, "")
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/)) {
+    val = substr(rest, RSTART, RLENGTH); emit(val, "IPv4", c_ip4, "")
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /([0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}/)) {
+    val = substr(rest, RSTART, RLENGTH); emit(val, "IPv6", c_ip6, "")
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  rest = line
+  while (match(rest, /::[0-9a-fA-F:]+/)) {
+    val = substr(rest, RSTART, RLENGTH); emit(val, "IPv6", c_ip6, "")
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+}
+' | {
+  selection=$(fzf \
     --ansi \
     --reverse \
     --no-sort \
@@ -142,21 +164,21 @@ selection=$(awk -F'\t' '{ v=substr($1, index($1,":")+1) } !seen[v]++' "$tmp" | \
     --header='tab=select  enter=open/copy' \
   || true)
 
-[ -z "$selection" ] && exit 0
+  [ -z "$selection" ] && exit 0
 
-client_tty=$(tmux display -p '#{client_tty}')
+  client_tty=$(tmux display -p '#{client_tty}')
 
-# Split selections: open URLs, collect the rest for copy.
-urls=$(echo "$selection" | cut -f1 | grep -E '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
-copies=$(echo "$selection" | cut -f1 | grep -vE '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
+  urls=$(echo "$selection" | cut -f1 | grep -E '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
+  copies=$(echo "$selection" | cut -f1 | grep -vE '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
 
-if [ -n "$urls" ]; then
-  echo "$urls" | while IFS= read -r u; do
-    open "$u"
-  done
-fi
+  if [ -n "$urls" ]; then
+    echo "$urls" | while IFS= read -r u; do
+      open "$u"
+    done
+  fi
 
-if [ -n "$copies" ]; then
-  printf '%s' "$copies" | tmux load-buffer -
-  printf '\033]52;c;%s\033\\' "$(printf '%s' "$copies" | base64)" > "$client_tty"
-fi
+  if [ -n "$copies" ]; then
+    printf '%s' "$copies" | tmux load-buffer -
+    printf '\033]52;c;%s\033\\' "$(printf '%s' "$copies" | base64)" > "$client_tty"
+  fi
+}

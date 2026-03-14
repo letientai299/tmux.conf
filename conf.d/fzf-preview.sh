@@ -11,7 +11,7 @@ t=$1
 capture_pane() {
   target=$1
   label=$2
-  printf '%s─── %s ───%s\n' "$a_muted" "$label" "$a_reset"
+  printf '%b─── %s ───%b\n' "$a_muted" "$label" "$a_reset"
   tmux capture-pane -e -t "$target" -p
   echo
 }

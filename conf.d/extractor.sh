@@ -138,49 +138,25 @@ selection=$(awk -F'\t' '{ v=substr($1, index($1,":")+1) } !seen[v]++' "$tmp" | \
     --no-sort \
     --delimiter='	' \
     --with-nth='2..' \
-    --expect='alt-enter,ctrl-o' \
-    --header='enter=copy  alt-enter=insert  ctrl-o=open' \
-    --no-multi \
+    --multi \
+    --header='tab=select  enter=open/copy' \
   || true)
 
 [ -z "$selection" ] && exit 0
 
-# Parse fzf --expect output: first line is the key pressed, second is the selection
-key=$(echo "$selection" | head -1)
-typed_val=$(echo "$selection" | tail -1 | cut -f1)
+client_tty=$(tmux display -p '#{client_tty}')
 
-[ -z "$typed_val" ] && exit 0
+# Split selections: open URLs, collect the rest for copy.
+urls=$(echo "$selection" | cut -f1 | grep -E '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
+copies=$(echo "$selection" | cut -f1 | grep -vE '^(URL|OSC8):' | sed 's/^[^:]*://' || true)
 
-# Split type:raw_value
-item_type=${typed_val%%:*}
-chosen=${typed_val#*:}
+if [ -n "$urls" ]; then
+  echo "$urls" | while IFS= read -r u; do
+    open "$u"
+  done
+fi
 
-# Use the triggering pane's cwd for resolve_path in actions.
-pane_path=$(tmux display -t "$pane_id" -p '#{pane_current_path}')
-
-if [ "$key" = "alt-enter" ]; then
-  # Insert into the source pane
-  tmux send-keys -t "$pane_id" -l "$chosen"
-elif [ "$key" = "ctrl-o" ]; then
-  # Open: file/path in nvim, url in browser, no-op for git/ip
-  case "$item_type" in
-    FILE:LINE)
-      file_part=${chosen%%:*}
-      line_part=${chosen#*:}
-      line_num=${line_part%%:*}
-      abs=$(resolve_path "$file_part")
-      tmux send-keys -t "$pane_id" "nvim +${line_num} $(printf '%q' "$abs")" Enter
-      ;;
-    PATH)
-      abs=$(resolve_path "$chosen")
-      tmux send-keys -t "$pane_id" "nvim $(printf '%q' "$abs")" Enter
-      ;;
-    URL|OSC8)
-      open "$chosen"
-      ;;
-  esac
-else
-  # Copy to tmux buffer and system clipboard via OSC 52
-  printf '%s' "$chosen" | tmux load-buffer -
-  printf '\033]52;c;%s\033\\' "$(printf '%s' "$chosen" | base64)" > "$(tmux display -p '#{client_tty}')"
+if [ -n "$copies" ]; then
+  printf '%s' "$copies" | tmux load-buffer -
+  printf '\033]52;c;%s\033\\' "$(printf '%s' "$copies" | base64)" > "$client_tty"
 fi

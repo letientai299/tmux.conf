@@ -38,16 +38,16 @@ Prefix is `C-b` (default).
 
 ### Pane Navigation
 
-| Key            | Action           |
-| -------------- | ---------------- |
-| `prefix C-h`   | Focus left       |
-| `prefix C-j`   | Focus down       |
-| `prefix C-k`   | Focus up         |
-| `prefix C-l`   | Focus right      |
-| `prefix h`     | Swap pane left   |
-| `prefix j`     | Swap pane down   |
-| `prefix k`     | Swap pane up     |
-| `prefix l`     | Swap pane right  |
+| Key          | Action          |
+| ------------ | --------------- |
+| `prefix C-h` | Focus left      |
+| `prefix C-j` | Focus down      |
+| `prefix C-k` | Focus up        |
+| `prefix C-l` | Focus right     |
+| `prefix h`   | Swap pane left  |
+| `prefix j`   | Swap pane down  |
+| `prefix k`   | Swap pane up    |
+| `prefix l`   | Swap pane right |
 
 ### Splits and Resize
 

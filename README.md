@@ -73,9 +73,10 @@ Copy-mode keys (`v`, `C-v`, `y`) work inside copy mode only.
 
 ### Other
 
-| Key        | Action        |
-| ---------- | ------------- |
-| `prefix R` | Reload config |
+| Key        | Action                                               |
+| ---------- | ---------------------------------------------------- |
+| `prefix w` | Session/window/pane picker (built-in, `/` to filter) |
+| `prefix R` | Reload config                                        |
 
 ## Config Layout
 
@@ -85,7 +86,7 @@ in `conf.d/` alphabetically. Each file in `conf.d/` handles one concern:
 - `copy.conf` — clipboard and copy-mode bindings
 - `keybinds.conf` — splits, resize, reload
 - `nav.conf` — hjkl pane navigation
-- `theme.conf` — minimal status line (placeholder for a custom theme)
+- `theme.conf` — status line, window tabs, pane borders
 
 ## Local Overrides
 

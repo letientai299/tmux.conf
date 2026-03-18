@@ -66,7 +66,6 @@ build_tree() {
   '
 }
 
-# Resolve TMUX_CONF_DIR for preview script path.
 script_dir=$(cd "$(dirname "$0")" && pwd)
 
 target=$(
